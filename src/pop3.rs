@@ -65,7 +65,7 @@ impl POP3Stream {
         match TcpStream::connect(format!("{}:{}", host, port)).await {
             Ok(tcp_stream) => {
                 let domain = DNSNameRef::try_from_ascii_str(host)
-                    .map_err(|_| Pop3Error::ConnectionFailed(format!("DNS resolve failed")))?;
+                    .map_err(|_| Pop3Error::ConnectionFailed("DNS resolve failed".to_string()))?;
                 let stream = connector
                     .connect(domain, tcp_stream)
                     .await
@@ -84,11 +84,11 @@ impl POP3Stream {
             POP3StreamType::Basic(stream) => stream
                 .read(&mut buf)
                 .await
-                .map_err(|e| Pop3Error::IOFailed(format!("{}", e))),
+                .map_err(|e| Pop3Error::IOFailed(e.to_string())),
             POP3StreamType::Tls(stream) => stream
                 .read(&mut buf)
                 .await
-                .map_err(|e| Pop3Error::IOFailed(format!("{}", e))),
+                .map_err(|e| Pop3Error::IOFailed(e.to_string())),
         }
     }
 
@@ -198,10 +198,12 @@ fn remove_response_prefix(resp: &str) -> Result<String, Pop3Error> {
             .unwrap()
             .to_string())
     } else if resp.starts_with("-ERR") {
-        Err(Pop3Error::ResponseError(format!(
-            "{}",
-            resp.strip_prefix("-ERR").map(|s| s.trim()).unwrap()
-        )))
+        Err(Pop3Error::ResponseError(
+            resp.strip_prefix("-ERR")
+                .map(|s| s.trim())
+                .unwrap()
+                .to_string(),
+        ))
     } else {
         Err(Pop3Error::InvalidResponse(format!(
             "unknown response {}",
