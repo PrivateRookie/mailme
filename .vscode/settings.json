@@ -2,8 +2,10 @@
     "cSpell.words": [
         "MAILME",
         "RETR",
+        "Uidl",
         "capa",
         "dotenv",
+        "rset",
         "rustls",
         "thiserror",
         "webpki"

@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use nom::{
     bytes::complete::tag,
+    bytes::complete::take_while,
+    multi::many0,
     multi::many1,
     sequence::{terminated, tuple},
     IResult,
@@ -13,6 +15,8 @@ use tokio_rustls::{client::TlsStream, rustls::ClientConfig, webpki::DNSNameRef, 
 
 // const POP3_PORT: usize = 110;
 // const POP3_SSL_PORT: usize = 995;
+// NOTE!!! "~" is not in RFC uidl uid chars, but it does appear in qq email
+const UIDL_CHARS: &str = "~!\"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}";
 
 #[derive(Error, Debug)]
 pub enum Pop3Error {
@@ -29,7 +33,7 @@ pub enum Pop3Error {
     #[error("{0}")]
     ServerErr(String),
 
-    /// response doesn't starts with +OK or -ERR
+    /// response doesn't starts with +OK or -ERR, or end correctly
     #[error("invalid response {0}")]
     UnknownResponse(String),
 
@@ -123,9 +127,15 @@ impl POP3Client {
     async fn read_one_line(&mut self) -> Result<String, Pop3Error> {
         let mut buf = [0; 1024];
         let n = self.try_read(&mut buf).await?;
-        let resp = String::from_utf8(buf[0..n].to_vec()).map_err(|_| Pop3Error::InvalidUtf8)?;
-        log::debug!("[Server] {}", resp);
-        remove_response_prefix(&resp)
+        if buf[n - 1] == 10 && buf[n - 2] == 13 {
+            let resp = String::from_utf8(buf[0..n].to_vec()).map_err(|_| Pop3Error::InvalidUtf8)?;
+            log::debug!("[Server] {}", resp);
+            remove_response_prefix(&resp)
+        } else {
+            Err(Pop3Error::UnknownResponse(
+                "incomplete response".to_string(),
+            ))
+        }
     }
 
     async fn send_cmd(&mut self, cmd: &str) -> Result<usize, Pop3Error> {
@@ -144,12 +154,6 @@ impl POP3Client {
     }
 
     pub async fn read_welcome(&mut self) -> Result<String, Pop3Error> {
-        self.read_one_line().await
-    }
-
-    // TODO should return Vec of cap
-    pub async fn capa(&mut self) -> Result<String, Pop3Error> {
-        self.send_cmd("CAPA").await?;
         self.read_one_line().await
     }
 
@@ -199,6 +203,63 @@ impl POP3Client {
     pub async fn retr(&mut self, msg_id: usize) -> Result<String, Pop3Error> {
         self.send_cmd(&format!("RETR {}", msg_id)).await?;
         self.read_multi_line().await
+    }
+
+    pub async fn dele(&mut self, msg_id: usize) -> Result<String, Pop3Error> {
+        self.send_cmd(&format!("DELE {}", msg_id)).await?;
+        self.read_one_line().await
+    }
+
+    pub async fn noop(&mut self) -> Result<String, Pop3Error> {
+        self.send_cmd("NOOP").await?;
+        self.read_one_line().await
+    }
+
+    pub async fn rset(&mut self) -> Result<String, Pop3Error> {
+        self.send_cmd("RSET").await?;
+        self.read_one_line().await
+    }
+
+    pub async fn quit(&mut self) -> Result<String, Pop3Error> {
+        self.send_cmd("QUIT").await?;
+        self.read_one_line().await
+    }
+
+    // optional commands:
+
+    // display first <num> lines of email <msg_id>
+    pub async fn top(&mut self, msg_id: usize, num: usize) -> Result<String, Pop3Error> {
+        self.send_cmd(&format!("TOP {} {}", msg_id, num)).await?;
+        self.read_multi_line().await
+    }
+
+    pub async fn uidl(&mut self) -> Result<Vec<POP3UidlData>, Pop3Error> {
+        self.send_cmd("UIDL").await?;
+        let resp = self.read_multi_line().await?;
+        let (i, data) = many0(terminated(parse_uidl, tag("\r\n")))(&resp)
+            .map_err(|e| Pop3Error::ParseError(e.to_string()))?;
+        if i != "." {
+            Err(Pop3Error::ParseError(format!("found unparsed data {}", i)))
+        } else {
+            Ok(data)
+        }
+    }
+
+    pub async fn uidl_one(&mut self, msg_id: usize) -> Result<POP3UidlData, Pop3Error> {
+        self.send_cmd(&format!("UIDL {}", msg_id)).await?;
+        let resp = self.read_one_line().await?;
+        let (i, uidl_data) = parse_uidl(&resp).map_err(|e| Pop3Error::ParseError(e.to_string()))?;
+        if i.len() != 0 {
+            Err(Pop3Error::ParseError(format!("found unparsed data {}", i)))
+        } else {
+            Ok(uidl_data)
+        }
+    }
+
+    // TODO should return Vec of cap
+    pub async fn capa(&mut self) -> Result<String, Pop3Error> {
+        self.send_cmd("CAPA").await?;
+        self.read_one_line().await
     }
 }
 
@@ -256,6 +317,18 @@ fn parse_multi_meta(input: &str) -> Result<Vec<POP3EmailMeta>, Pop3Error> {
     Ok(ret)
 }
 
+fn parse_uidl(input: &str) -> IResult<&str, POP3UidlData> {
+    let (i, (message_id, _, message_uid)) =
+        tuple((take_num, tag(" "), take_while(|c| UIDL_CHARS.contains(c))))(input)?;
+    Ok((
+        i,
+        POP3UidlData {
+            message_id,
+            message_uid: message_uid.to_string(),
+        },
+    ))
+}
+
 #[derive(Debug, Clone)]
 pub struct POP3EmailMeta {
     pub message_id: usize,
@@ -266,6 +339,12 @@ pub struct POP3EmailMeta {
 pub struct POP3Status {
     msg_count: usize,
     mailbox_size: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct POP3UidlData {
+    pub message_id: usize,
+    pub message_uid: String,
 }
 
 #[cfg(test)]
@@ -284,10 +363,17 @@ mod tests {
             println!("{:?}", client.read_welcome().await);
             println!("{:?}", client.user(&var("MAILME_USER").unwrap()).await);
             println!("{:?}", client.pass(&var("MAILME_PASSWD").unwrap()).await);
-            println!("{:?}", client.stat().await);
-            println!("{:?}", client.list(Some(99)).await);
-            println!("{:?}", client.list(None).await);
-            println!("{:?}", client.retr(2).await);
+            // println!("{:?}", client.top(1, 10).await);
+            // println!("{:?}", client.stat().await);
+            // println!("{:?}", client.list(Some(99)).await);
+            // println!("{:?}", client.noop().await);
+            // println!("{:?}", client.rset().await);
+            // println!("{:?}", client.list(None).await);
+            println!("{:?}", client.uidl_one(1).await);
+            println!("{:?}", client.uidl().await);
+            println!("{:?}", client.quit().await);
+            // println!("{:?}", client.dele(1).await);
+            // println!("{:?}", client.retr(2).await);
         })
     }
 }
