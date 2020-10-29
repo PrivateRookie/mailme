@@ -3,6 +3,10 @@ name = "mailme"
 version = "0.1.0"
 authors = ["PrivateRookie <996514515@qq.com>"]
 edition = "2018"
+description = "Async Rust pop3 client with tokio"
+homepage = "https://github.com/PrivateRookie/mailme"
+keywords = ["pop3", "async", "tokio", "network"]
+categories = ["network-programming", "email"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
