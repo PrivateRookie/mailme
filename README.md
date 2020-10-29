@@ -27,7 +27,7 @@ add tokio and mailme to dep
 
 ```toml
 tokio = { version = "0.3.1", features = ["io-util", "io-std", "net", "rt", "rt-multi-thread"] }
-mailme = "0.1.0"
+mailme = "0.1.1"
 ```
 
 ```rust
@@ -40,9 +40,8 @@ fn main() {
         // if not tls connection, use new_basic instead
         let mut client = POP3Client::new_tls("pop.qq.com", 995).await.unwrap();
         // remember to read welcome message
-        client.read_welcome().await.unwrap();
-        // login
         println!("{:?}", client.read_welcome().await);
+        // login
         println!("{:?}", client.user("PrivateRookie").await);
         println!("{:?}", client.pass("踏遍青山人未老").await);
 
