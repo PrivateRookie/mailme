@@ -3,6 +3,7 @@
         "MAILME",
         "RETR",
         "Uidl",
+        "apop",
         "capa",
         "dotenv",
         "rset",

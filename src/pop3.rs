@@ -185,18 +185,16 @@ impl POP3Client {
         })
     }
 
-    pub async fn list(&mut self, msg_id: Option<usize>) -> Result<Vec<POP3EmailMeta>, Pop3Error> {
-        let cmd = match msg_id {
-            Some(msg_id) => format!("LIST {}", msg_id),
-            None => format!("LIST"),
-        };
-        self.send_cmd(&cmd).await?;
+    pub async fn list_one(&mut self, msg_id: usize) -> Result<POP3EmailMeta, Pop3Error> {
+        self.send_cmd(&format!("LIST {}", msg_id)).await?;
         let resp = self.read_one_line().await?;
-        if msg_id.is_some() {
-            parse_single_meta(&resp).map(|meta| vec![meta])
-        } else {
-            parse_multi_meta(&resp)
-        }
+        parse_single_meta(&resp)
+    }
+
+    pub async fn list(&mut self) -> Result<Vec<POP3EmailMeta>, Pop3Error> {
+        self.send_cmd("LIST").await?;
+        let resp = self.read_one_line().await?;
+        parse_multi_meta(&resp)
     }
 
     // TODO should return parsed email struct
@@ -222,6 +220,7 @@ impl POP3Client {
 
     pub async fn quit(&mut self) -> Result<String, Pop3Error> {
         self.send_cmd("QUIT").await?;
+        self.is_auth = false;
         self.read_one_line().await
     }
 
@@ -259,6 +258,13 @@ impl POP3Client {
     // TODO should return Vec of cap
     pub async fn capa(&mut self) -> Result<String, Pop3Error> {
         self.send_cmd("CAPA").await?;
+        self.read_one_line().await
+    }
+
+    // WARNING this method do check timestamp in greeting and
+    // not every server impl APOP command
+    pub async fn apop(&mut self, name: &str, digest: &str) -> Result<String, Pop3Error> {
+        self.send_cmd(&format!("APOP {} {}", name, digest)).await?;
         self.read_one_line().await
     }
 }
@@ -349,7 +355,7 @@ pub struct POP3UidlData {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::pop3::POP3Client;
     use std::env::var;
     use tokio::runtime::Runtime;
 
