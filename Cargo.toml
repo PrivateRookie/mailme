@@ -1,6 +1,6 @@
 [package]
 name = "mailme"
-version = "0.1.0"
+version = "0.1.1-alpha.0"
 authors = ["PrivateRookie <996514515@qq.com>"]
 edition = "2018"
 description = "Async Rust pop3 client with tokio"
