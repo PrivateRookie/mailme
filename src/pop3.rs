@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::{fs::File, io::BufReader};
 
 use nom::{
     bytes::complete::tag,
@@ -13,8 +14,8 @@ use tokio::net::TcpStream;
 use tokio::prelude::*;
 use tokio_rustls::{client::TlsStream, rustls::ClientConfig, webpki::DNSNameRef, TlsConnector};
 
-// const POP3_PORT: usize = 110;
-// const POP3_SSL_PORT: usize = 995;
+pub const POP3_PORT: usize = 110;
+pub const POP3_SSL_PORT: usize = 995;
 // NOTE!!! "~" is not in RFC uidl uid chars, but it does appear in qq email
 const UIDL_CHARS: &str = "~!\"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}";
 
@@ -39,6 +40,9 @@ pub enum Pop3Error {
 
     #[error("parse error {0}")]
     ParseError(String),
+
+    #[error("add pem failed{0}")]
+    AddPemFailed(String),
 }
 
 pub enum POP3StreamType {
@@ -66,11 +70,19 @@ impl POP3Client {
         }
     }
 
-    pub async fn new_tls(host: &str, port: u16) -> Result<Self, Pop3Error> {
+    pub async fn new_tls(host: &str, port: u16, pem_path: Option<&str>) -> Result<Self, Pop3Error> {
         let mut config = ClientConfig::new();
         config
             .root_store
             .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+        if let Some(path) = pem_path {
+            let pem = File::open(path).map_err(|e| Pop3Error::AddPemFailed(format!("{}", e)))?;
+            let mut pem = BufReader::new(pem);
+            config
+                .root_store
+                .add_pem_file(&mut pem)
+                .map_err(|_| Pop3Error::AddPemFailed("".to_string()))?;
+        }
         let connector = TlsConnector::from(Arc::new(config));
         match TcpStream::connect(format!("{}:{}", host, port)).await {
             Ok(tcp_stream) => {
@@ -157,19 +169,16 @@ impl POP3Client {
         self.read_one_line().await
     }
 
-    pub async fn user(&mut self, name: &str) -> Result<(), Pop3Error> {
+    pub async fn user(&mut self, name: &str) -> Result<String, Pop3Error> {
         self.send_cmd(&format!("USER {}", name)).await?;
-        let resp = self.read_one_line().await?;
-        assert!(resp.is_empty());
-        Ok(())
+        self.read_one_line().await
     }
 
-    pub async fn pass(&mut self, passwd: &str) -> Result<(), Pop3Error> {
+    pub async fn pass(&mut self, passwd: &str) -> Result<String, Pop3Error> {
         self.send_cmd(&format!("PASS {}", passwd)).await?;
         let resp = self.read_one_line().await?;
-        assert!(resp.is_empty());
         self.is_auth = true;
-        Ok(())
+        Ok(resp)
     }
 
     pub async fn stat(&mut self) -> Result<POP3Status, Pop3Error> {
@@ -364,22 +373,23 @@ mod tests {
         dotenv::dotenv().ok();
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let mut client = POP3Client::new_tls("pop.qq.com", 995).await.unwrap();
-            // let mut stream = POP3Stream::connect("pop.163.com", 110).await.unwrap();
-            println!("{:?}", client.read_welcome().await);
-            println!("{:?}", client.user(&var("MAILME_USER").unwrap()).await);
-            println!("{:?}", client.pass(&var("MAILME_PASSWD").unwrap()).await);
+            // let mut client = POP3Client::new_tls("pop.qq.com", 995, None).await.unwrap();
+            let mut client = POP3Client::new_basic("pop.163.com", 110).await.unwrap();
+            client.read_welcome().await.unwrap();
+            client.user(&var("MAILME_USER").unwrap()).await.unwrap();
+            client.pass(&var("MAILME_PASSWD").unwrap()).await.unwrap();
             // println!("{:?}", client.top(1, 10).await);
             // println!("{:?}", client.stat().await);
             // println!("{:?}", client.list(Some(99)).await);
             // println!("{:?}", client.noop().await);
             // println!("{:?}", client.rset().await);
             // println!("{:?}", client.list(None).await);
-            println!("{:?}", client.uidl_one(1).await);
-            println!("{:?}", client.uidl().await);
+            // println!("{:?}", client.uidl_one(1).await);
+            // println!("{:?}", client.uidl().await);
+            // println!("{:?}", client.retr(2).await);
+            // let mail = client.retr(2).await.unwrap();
             println!("{:?}", client.quit().await);
             // println!("{:?}", client.dele(1).await);
-            // println!("{:?}", client.retr(2).await);
         })
     }
 }
